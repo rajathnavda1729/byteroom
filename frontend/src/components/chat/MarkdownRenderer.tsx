@@ -2,8 +2,17 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { Components } from 'react-markdown'
+import { MermaidDiagram } from './MermaidDiagram'
+
+/** react-markdown may pass multiple text nodes as an array; String(array) inserts commas and breaks Mermaid. */
+function codePlainText(children: ReactNode): string {
+  if (children == null || typeof children === 'boolean') return ''
+  if (typeof children === 'string' || typeof children === 'number') return String(children)
+  if (Array.isArray(children)) return children.map(codePlainText).join('')
+  return ''
+}
 
 interface Props {
   content: string
@@ -34,8 +43,19 @@ const components: Components = {
   code({ className, children, ...props }) {
     const match = /language-(\w+)/.exec(className ?? '')
     const lang = match?.[1] ?? ''
-    const code = String(children).replace(/\n$/, '')
+    const code = codePlainText(children).replace(/\n$/, '')
     const inline = !className
+
+    if (!inline && lang === 'mermaid') {
+      return (
+        <div className="relative my-2 rounded-lg overflow-hidden">
+          <CopyButton code={code} />
+          <div className="pt-10">
+            <MermaidDiagram content={code} />
+          </div>
+        </div>
+      )
+    }
 
     if (!inline && lang) {
       return (

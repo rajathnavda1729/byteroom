@@ -47,3 +47,19 @@ func TestSanitizeMarkdown_PlainText_PassesThrough(t *testing.T) {
 
 	assert.Equal(t, input, result)
 }
+
+func TestSanitizeMarkdown_FencedMermaid_PreservesArrows(t *testing.T) {
+	input := "```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```"
+	result := SanitizeMarkdown(input)
+
+	assert.Contains(t, result, "-->")
+	assert.NotContains(t, result, "--&gt;")
+}
+
+func TestSanitizeMarkdown_FencedCode_PreservesAngleBrackets(t *testing.T) {
+	input := "Text\n\n```go\nif x > 0 { }\n```\n"
+	result := SanitizeMarkdown(input)
+
+	assert.Contains(t, result, "x > 0")
+	assert.NotContains(t, result, "&gt;")
+}

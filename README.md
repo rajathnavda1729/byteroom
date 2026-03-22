@@ -152,7 +152,7 @@ frontend (React + Vite)
                          S3-compatible (image uploads, optional)
 ```
 
-See [`docs/HLD.md`](docs/HLD.md) for a high-level diagram and [`docs/LLD.md`](docs/LLD.md) for the detailed design.
+See [`docs/HLD.md`](docs/HLD.md) for a high-level diagram and [`docs/LLD.md`](docs/LLD.md) for the detailed design. New contributors should read [`docs/dev-onboarding.md`](docs/dev-onboarding.md) for code navigation, deep-dive references, and a glossary.
 
 ---
 

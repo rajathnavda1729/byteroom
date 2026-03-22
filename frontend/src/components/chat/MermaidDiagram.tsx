@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 interface Props {
   content: string
@@ -6,49 +6,81 @@ interface Props {
 
 let mermaidInitialized = false
 
+/** Backend sanitizer (bluemonday) may escape `>` as `&gt;` in older stored messages. */
+function decodeHtmlEntities(text: string): string {
+  if (typeof document === 'undefined') {
+    return text
+      .replaceAll('&amp;', '&')
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+  }
+  const t = document.createElement('textarea')
+  t.innerHTML = text
+  return t.value
+}
+
+function normalizeMermaidSource(source: string): string {
+  const decoded = decodeHtmlEntities(source.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n'))
+  return decoded.trim()
+}
+
 async function getMermaid() {
   const m = await import('mermaid')
+  const api = m.default ?? m
   if (!mermaidInitialized) {
-    m.default.initialize({
+    api.initialize({
       startOnLoad: false,
       theme: 'dark',
       securityLevel: 'loose',
     })
     mermaidInitialized = true
   }
-  return m.default
+  return api
 }
 
 export function MermaidDiagram({ content }: Props) {
   const [svg, setSvg] = useState<string | null>(null)
-  const [error, setError] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
-  const idRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`)
-  const hasMany = content.split('\n').length > 10
+  const normalized = normalizeMermaidSource(content)
+  const hasMany = normalized.split('\n').length > 10
 
   useEffect(() => {
     let cancelled = false
     setSvg(null)
-    setError(false)
+    setErrorMessage(null)
+
+    if (!normalized) {
+      setErrorMessage('Empty diagram')
+      return
+    }
+
+    const renderId = `br-mermaid-${crypto.randomUUID()}`
 
     getMermaid()
-      .then((mermaid) => mermaid.render(idRef.current, content.trim()))
+      .then((mermaid) => mermaid.render(renderId, normalized))
       .then(({ svg: result }) => {
         if (!cancelled) setSvg(result)
       })
-      .catch(() => {
-        if (!cancelled) setError(true)
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          const msg = err instanceof Error ? err.message : 'Unknown error'
+          setErrorMessage(msg)
+        }
       })
 
     return () => {
       cancelled = true
     }
-  }, [content])
+  }, [normalized])
 
-  if (error) {
+  if (errorMessage != null) {
     return (
       <div className="bg-red-900/20 border border-red-700 rounded-lg p-3 text-sm text-red-400">
-        Failed to render diagram
+        <div>Failed to render diagram</div>
+        <div className="text-xs mt-1 text-red-300/90 font-mono break-words">{errorMessage}</div>
       </div>
     )
   }

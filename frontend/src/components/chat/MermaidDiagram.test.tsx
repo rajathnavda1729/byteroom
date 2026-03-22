@@ -6,6 +6,9 @@ vi.mock('mermaid', () => ({
   default: {
     initialize: vi.fn(),
     render: vi.fn(async (_id: string, content: string) => {
+      if (content.includes('&gt;') || content.includes('&lt;') || content.includes('&amp;')) {
+        throw new Error('Parse error: HTML entities must be decoded before render')
+      }
       if (!content.startsWith('graph') && !content.startsWith('sequenceDiagram') && !content.startsWith('flowchart')) {
         throw new Error('Parse error')
       }
@@ -23,6 +26,15 @@ describe('MermaidDiagram', () => {
 
   it('renders mermaid diagram as SVG', async () => {
     render(<MermaidDiagram content="graph TD\n  A[Start] --> B[End]" />)
+
+    await waitFor(() => {
+      const imgs = screen.getAllByRole('img', { name: /diagram/i })
+      expect(imgs.length).toBeGreaterThan(0)
+    })
+  })
+
+  it('decodes sanitizer-escaped arrows before calling mermaid', async () => {
+    render(<MermaidDiagram content="flowchart TD\n  A[Start] --&gt; B[End]" />)
 
     await waitFor(() => {
       const imgs = screen.getAllByRole('img', { name: /diagram/i })

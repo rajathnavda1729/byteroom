@@ -1,6 +1,12 @@
 import { render, screen } from '@testing-library/react'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { MarkdownRenderer } from './MarkdownRenderer'
+
+vi.mock('./MermaidDiagram', () => ({
+  MermaidDiagram: ({ content }: { content: string }) => (
+    <div data-testid="mermaid-diagram">{content}</div>
+  ),
+}))
 
 describe('MarkdownRenderer', () => {
   it('renders plain text', () => {
@@ -30,6 +36,14 @@ describe('MarkdownRenderer', () => {
     const code = '```javascript\nconst x = 42;\nconsole.log(x);\n```'
     render(<MarkdownRenderer content={code} />)
     expect(screen.getByText(/const/)).toBeInTheDocument()
+  })
+
+  it('renders mermaid fenced blocks with MermaidDiagram', () => {
+    const md = '```mermaid\ngraph TD\n  A-->B\n```'
+    render(<MarkdownRenderer content={md} />)
+    const el = screen.getByTestId('mermaid-diagram')
+    expect(el).toHaveTextContent('graph TD')
+    expect(el).toHaveTextContent('A-->B')
   })
 
   it('renders links with target="_blank"', () => {
