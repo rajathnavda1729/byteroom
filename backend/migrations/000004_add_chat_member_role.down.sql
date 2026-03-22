@@ -1,0 +1,2 @@
+ALTER TABLE chat_members DROP COLUMN IF EXISTS role;
+DROP TYPE IF EXISTS member_role;

@@ -1,0 +1,439 @@
+# ByteRoom: Code Style & Architecture Guidelines
+
+## Project Structure
+
+### Backend (Go)
+
+```
+backend/
+├── cmd/
+│   └── server/
+│       └── main.go              # Application entry point
+├── internal/
+│   ├── api/
+│   │   ├── handler/             # HTTP handlers
+│   │   ├── middleware/          # Auth, CORS, logging
+│   │   └── router.go            # Route definitions
+│   ├── websocket/
+│   │   ├── hub.go               # Connection manager
+│   │   ├── client.go            # WebSocket client
+│   │   └── message.go           # WS message types
+│   ├── domain/
+│   │   ├── message/
+│   │   │   ├── entity.go        # Message domain entity
+│   │   │   ├── repository.go    # Repository interface
+│   │   │   └── service.go       # Business logic
+│   │   ├── chat/
+│   │   │   ├── entity.go
+│   │   │   ├── repository.go
+│   │   │   └── service.go
+│   │   └── user/
+│   │       ├── entity.go
+│   │       ├── repository.go
+│   │       └── service.go
+│   ├── infrastructure/
+│   │   ├── postgres/            # PostgreSQL implementations
+│   │   ├── s3/                  # S3 client
+│   │   └── sanitizer/           # XSS sanitization (bluemonday)
+│   └── config/
+│       └── config.go            # Configuration management
+├── migrations/                   # Database migrations
+├── api/
+│   └── openapi.yaml             # API specification
+├── go.mod
+└── go.sum
+```
+
+### Frontend (React/TypeScript)
+
+```
+frontend/
+├── src/
+│   ├── components/
+│   │   ├── ui/                  # Reusable UI components (Button, Input, etc.)
+│   │   ├── chat/
+│   │   │   ├── MessageBubble/
+│   │   │   ├── ChatRoom/
+│   │   │   ├── MessageInput/
+│   │   │   └── MemberList/
+│   │   └── diagrams/
+│   │       ├── MermaidRenderer/
+│   │       └── ExcalidrawEmbed/
+│   ├── hooks/
+│   │   ├── useWebSocket.ts
+│   │   ├── useChat.ts
+│   │   └── useAuth.ts
+│   ├── stores/
+│   │   ├── chatStore.ts         # Zustand store for chat state
+│   │   ├── userStore.ts
+│   │   └── connectionStore.ts   # WebSocket connection state
+│   ├── services/
+│   │   ├── api.ts               # REST API client
+│   │   └── websocket.ts         # WebSocket client
+│   ├── types/
+│   │   └── index.ts             # TypeScript interfaces
+│   ├── utils/
+│   │   └── markdown.ts          # Markdown utilities
+│   ├── pages/
+│   │   ├── Login.tsx
+│   │   ├── ChatList.tsx
+│   │   └── ChatRoom.tsx
+│   ├── App.tsx
+│   └── main.tsx
+├── public/
+├── index.html
+├── vite.config.ts
+├── tailwind.config.js
+├── tsconfig.json
+└── package.json
+```
+
+## Go Coding Standards
+
+### Package Naming
+
+```go
+// Good: lowercase, single word
+package message
+package websocket
+package postgres
+
+// Bad: underscores, mixed case
+package message_service  // Don't
+package MessageService   // Don't
+```
+
+### Interface Design
+
+```go
+// Define interfaces where they're used, not where implemented
+// internal/domain/message/repository.go
+type Repository interface {
+    Save(ctx context.Context, msg *Message) error
+    FindByID(ctx context.Context, id string) (*Message, error)
+    FindByChatID(ctx context.Context, chatID string, limit, offset int) ([]*Message, error)
+}
+```
+
+### Error Handling
+
+```go
+// Use sentinel errors for known error conditions
+var (
+    ErrMessageNotFound    = errors.New("message not found")
+    ErrDuplicateMessageID = errors.New("duplicate message ID")
+    ErrInvalidContent     = errors.New("invalid message content")
+)
+
+// Wrap errors with context
+func (s *Service) Send(ctx context.Context, msg *Message) error {
+    if err := s.repo.Save(ctx, msg); err != nil {
+        return fmt.Errorf("saving message: %w", err)
+    }
+    return nil
+}
+```
+
+### Context Usage
+
+```go
+// Always pass context as first parameter
+func (s *Service) GetHistory(ctx context.Context, chatID string) ([]*Message, error) {
+    // Use context for cancellation and timeouts
+    ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+    defer cancel()
+    
+    return s.repo.FindByChatID(ctx, chatID, 50, 0)
+}
+```
+
+### Struct Tags
+
+```go
+type Message struct {
+    ID          string    `json:"message_id" db:"id"`
+    ChatID      string    `json:"chat_id" db:"chat_id"`
+    SenderID    string    `json:"sender_id" db:"sender_id"`
+    ContentType string    `json:"content_type" db:"content_type"`
+    Content     string    `json:"content" db:"content"`
+    CreatedAt   time.Time `json:"timestamp" db:"created_at"`
+}
+```
+
+## TypeScript/React Coding Standards
+
+### Component Structure
+
+```typescript
+// components/chat/MessageBubble/MessageBubble.tsx
+import { FC, memo } from 'react';
+import { cn } from '@/utils/cn';
+import type { Message } from '@/types';
+
+interface MessageBubbleProps {
+  message: Message;
+  isOwn: boolean;
+  className?: string;
+}
+
+export const MessageBubble: FC<MessageBubbleProps> = memo(({ 
+  message, 
+  isOwn,
+  className 
+}) => {
+  return (
+    <div className={cn(
+      'rounded-lg p-3',
+      isOwn ? 'bg-blue-500 text-white' : 'bg-gray-100',
+      className
+    )}>
+      {/* Component content */}
+    </div>
+  );
+});
+
+MessageBubble.displayName = 'MessageBubble';
+```
+
+### Hooks Pattern
+
+```typescript
+// hooks/useWebSocket.ts
+import { useEffect, useRef, useCallback } from 'react';
+import { useConnectionStore } from '@/stores/connectionStore';
+
+interface UseWebSocketOptions {
+  url: string;
+  onMessage: (data: unknown) => void;
+  reconnectAttempts?: number;
+}
+
+export function useWebSocket({ url, onMessage, reconnectAttempts = 5 }: UseWebSocketOptions) {
+  const wsRef = useRef<WebSocket | null>(null);
+  const { setConnected, setReconnecting } = useConnectionStore();
+
+  const connect = useCallback(() => {
+    // Implementation
+  }, [url, onMessage]);
+
+  const send = useCallback((data: unknown) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+    }
+  }, []);
+
+  useEffect(() => {
+    connect();
+    return () => {
+      wsRef.current?.close();
+    };
+  }, [connect]);
+
+  return { send };
+}
+```
+
+### Zustand Store Pattern
+
+```typescript
+// stores/chatStore.ts
+import { create } from 'zustand';
+import { immer } from 'zustand/middleware/immer';
+import type { Message, Chat } from '@/types';
+
+interface ChatState {
+  chats: Record<string, Chat>;
+  messages: Record<string, Message[]>;
+  activeChat: string | null;
+}
+
+interface ChatActions {
+  setActiveChat: (chatId: string) => void;
+  addMessage: (chatId: string, message: Message) => void;
+  addOptimisticMessage: (chatId: string, message: Message) => void;
+  confirmMessage: (tempId: string, confirmedMessage: Message) => void;
+}
+
+export const useChatStore = create<ChatState & ChatActions>()(
+  immer((set) => ({
+    chats: {},
+    messages: {},
+    activeChat: null,
+    
+    setActiveChat: (chatId) => set((state) => {
+      state.activeChat = chatId;
+    }),
+    
+    addMessage: (chatId, message) => set((state) => {
+      if (!state.messages[chatId]) {
+        state.messages[chatId] = [];
+      }
+      state.messages[chatId].push(message);
+    }),
+    
+    addOptimisticMessage: (chatId, message) => set((state) => {
+      if (!state.messages[chatId]) {
+        state.messages[chatId] = [];
+      }
+      state.messages[chatId].push({ ...message, status: 'pending' });
+    }),
+    
+    confirmMessage: (tempId, confirmedMessage) => set((state) => {
+      // Find and replace optimistic message
+    }),
+  }))
+);
+```
+
+### Type Definitions
+
+```typescript
+// types/index.ts
+export type ContentType = 'markdown' | 'diagram_state' | 'image';
+export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'failed';
+
+export interface Message {
+  message_id: string;
+  chat_id: string;
+  sender_id: string;
+  content_type: ContentType;
+  content: string;
+  timestamp: string;
+  status?: MessageStatus;
+}
+
+export interface Chat {
+  chat_id: string;
+  name: string;
+  type: 'direct' | 'group';
+  members: string[];
+  created_at: string;
+}
+
+export interface User {
+  user_id: string;
+  username: string;
+  display_name: string;
+  avatar_url?: string;
+}
+
+// WebSocket Events
+export type WSEvent = 
+  | { event: 'message.send'; data: Omit<Message, 'timestamp'> }
+  | { event: 'message.ack'; data: { message_id: string; status: boolean } }
+  | { event: 'message.new'; data: Message }
+  | { event: 'user.typing'; data: { chat_id: string; user_id: string } };
+```
+
+## Tailwind CSS Conventions
+
+### Use Design Tokens
+
+```javascript
+// tailwind.config.js
+module.exports = {
+  theme: {
+    extend: {
+      colors: {
+        primary: {
+          50: '#eff6ff',
+          500: '#3b82f6',
+          600: '#2563eb',
+          700: '#1d4ed8',
+        },
+        surface: {
+          light: '#ffffff',
+          dark: '#1e1e1e',
+        },
+      },
+      fontFamily: {
+        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+      },
+    },
+  },
+};
+```
+
+### Component Class Organization
+
+```tsx
+// Order: layout → sizing → spacing → typography → colors → effects → states
+<div className={cn(
+  // Layout
+  'flex flex-col',
+  // Sizing
+  'w-full max-w-2xl',
+  // Spacing
+  'p-4 gap-2',
+  // Typography
+  'text-sm font-medium',
+  // Colors
+  'bg-surface-light dark:bg-surface-dark text-gray-900 dark:text-gray-100',
+  // Effects
+  'rounded-lg shadow-md',
+  // States
+  'hover:shadow-lg transition-shadow'
+)}>
+```
+
+## Git Commit Conventions
+
+```
+<type>(<scope>): <subject>
+
+Types:
+- feat: New feature
+- fix: Bug fix
+- test: Adding tests
+- refactor: Code refactoring
+- docs: Documentation
+- chore: Build/config changes
+
+Examples:
+feat(message): add idempotent message creation
+test(websocket): add hub broadcast tests
+fix(sanitizer): escape script tags in code blocks
+```
+
+## Security Guidelines
+
+### XSS Prevention (Backend)
+
+```go
+import "github.com/microcosm-cc/bluemonday"
+
+var policy = bluemonday.UGCPolicy()
+
+func SanitizeMarkdown(content string) string {
+    return policy.Sanitize(content)
+}
+```
+
+### Input Validation
+
+```go
+func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
+    var req SendMessageRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "invalid request body", http.StatusBadRequest)
+        return
+    }
+    
+    // Validate required fields
+    if req.Content == "" || req.ChatID == "" {
+        http.Error(w, "content and chat_id are required", http.StatusBadRequest)
+        return
+    }
+    
+    // Validate content length
+    if len(req.Content) > 50000 {
+        http.Error(w, "content exceeds maximum length", http.StatusBadRequest)
+        return
+    }
+    
+    // Sanitize content
+    req.Content = sanitizer.SanitizeMarkdown(req.Content)
+    
+    // Process...
+}
+```

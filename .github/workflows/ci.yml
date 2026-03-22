@@ -1,0 +1,252 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ──────────────────────────────────────────────────────────
+  # Go backend: lint, test with race detector, coverage gate
+  # ──────────────────────────────────────────────────────────
+  backend-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: byteroom_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: backend/go.sum
+
+      - name: Run migrations
+        working-directory: backend
+        run: |
+          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+          migrate -path migrations \
+            -database "postgres://test:test@localhost:5432/byteroom_test?sslmode=disable" up
+        env:
+          DB_HOST: localhost
+          DB_USER: test
+          DB_PASSWORD: test
+          DB_NAME: byteroom_test
+
+      - name: Run unit tests with race detector
+        working-directory: backend
+        run: go test ./... -v -race -coverprofile=coverage.out -covermode=atomic
+        env:
+          DB_HOST: localhost
+          DB_USER: test
+          DB_PASSWORD: test
+          DB_NAME: byteroom_test
+          JWT_SECRET: ci-test-secret-32-chars-minimum!
+
+      - name: Enforce coverage ≥ 80%
+        working-directory: backend
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${COVERAGE}%"
+          if awk "BEGIN{exit !($COVERAGE < 80)}"; then
+            echo "::error::Coverage ${COVERAGE}% is below the 80% threshold"
+            exit 1
+          fi
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: backend
+          version: latest
+
+  # ──────────────────────────────────────────────────────────
+  # Frontend: lint, unit tests, coverage gate, build
+  # ──────────────────────────────────────────────────────────
+  frontend-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Unit tests with coverage
+        working-directory: frontend
+        run: npm run test:coverage
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Check bundle size (< 1.5 MB)
+        working-directory: frontend
+        run: |
+          SIZE=$(du -sb dist/assets/*.js | awk '{sum+=$1} END{print sum}')
+          echo "JS bundle size: ${SIZE} bytes"
+          if [ "$SIZE" -gt 1572864 ]; then
+            echo "::warning::JS bundle size ${SIZE}B exceeds 1.5 MB recommendation"
+          fi
+
+  # ──────────────────────────────────────────────────────────
+  # E2E tests (Playwright) — only after unit tests pass
+  # ──────────────────────────────────────────────────────────
+  e2e-test:
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test]
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: e2e
+          POSTGRES_PASSWORD: e2e
+          POSTGRES_DB: byteroom_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run migrations
+        working-directory: backend
+        run: |
+          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+          migrate -path migrations \
+            -database "postgres://e2e:e2e@localhost:5432/byteroom_e2e?sslmode=disable" up
+
+      - name: Start backend
+        working-directory: backend
+        run: go run ./cmd/server &
+        env:
+          PORT: "8080"
+          DB_HOST: localhost
+          DB_USER: e2e
+          DB_PASSWORD: e2e
+          DB_NAME: byteroom_e2e
+          DB_SSLMODE: disable
+          JWT_SECRET: e2e-test-secret-minimum-32-chars!!
+          ENV: test
+
+      - name: Wait for backend
+        run: |
+          timeout 30 bash -c 'until curl -sf http://localhost:8080/health; do sleep 1; done'
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Start frontend preview
+        working-directory: frontend
+        run: npm run preview -- --port 5173 &
+
+      - name: Wait for frontend
+        run: |
+          timeout 30 bash -c 'until curl -sf http://localhost:5173; do sleep 1; done'
+
+      - name: Run E2E tests
+        working-directory: frontend
+        run: npx playwright test --project=chromium
+        env:
+          BASE_URL: http://localhost:5173
+
+      - name: Upload Playwright report on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+  # ──────────────────────────────────────────────────────────
+  # Build & push Docker images (main branch only)
+  # ──────────────────────────────────────────────────────────
+  build-images:
+    runs-on: ubuntu-latest
+    needs: [e2e-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/backend:latest
+            ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/frontend:latest
+            ghcr.io/${{ github.repository }}/frontend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

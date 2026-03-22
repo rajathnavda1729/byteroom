@@ -1,0 +1,405 @@
+# ByteRoom: Test-First Development Guidelines
+
+## Overview
+
+This project follows **Test-Driven Development (TDD)** principles. Every feature must have tests written BEFORE implementation code.
+
+## The TDD Cycle (Red-Green-Refactor)
+
+```mermaid
+graph LR
+    A[Red: Write Failing Test] --> B[Green: Write Minimal Code to Pass]
+    B --> C[Refactor: Improve Code Quality]
+    C --> A
+```
+
+## Core Principles
+
+### 1. Test First, Always
+
+- **NEVER** write implementation code without a failing test
+- Tests define the expected behavior and act as living documentation
+- If you can't write a test for it, you don't understand the requirement
+
+### 2. Test Granularity
+
+```
+Unit Tests (70%)     → Individual functions, methods, components
+Integration Tests (20%) → API endpoints, database operations, WebSocket flows
+E2E Tests (10%)      → Critical user journeys
+```
+
+### 3. Naming Conventions
+
+#### Go Backend Tests
+
+```go
+// File: message_service_test.go
+func TestMessageService_Send_ValidMessage_ReturnsMessageID(t *testing.T) {}
+func TestMessageService_Send_EmptyContent_ReturnsError(t *testing.T) {}
+func TestMessageService_Send_DuplicateID_IsIdempotent(t *testing.T) {}
+```
+
+Pattern: `Test<Unit>_<Method>_<Scenario>_<ExpectedBehavior>`
+
+#### React Frontend Tests
+
+```typescript
+// File: MessageBubble.test.tsx
+describe('MessageBubble', () => {
+  it('renders markdown content correctly', () => {});
+  it('displays syntax-highlighted code blocks', () => {});
+  it('renders mermaid diagrams as SVG', () => {});
+  it('shows pending state before ACK received', () => {});
+});
+```
+
+## Backend Testing Guidelines (Go)
+
+### Required Test Files Structure
+
+```
+internal/
+├── message/
+│   ├── service.go
+│   ├── service_test.go      # Unit tests
+│   ├── handler.go
+│   ├── handler_test.go      # HTTP handler tests
+│   └── repository.go
+│   └── repository_test.go   # Database integration tests
+├── websocket/
+│   ├── hub.go
+│   ├── hub_test.go
+│   └── client.go
+│   └── client_test.go
+```
+
+### Test Categories
+
+#### Unit Tests (No External Dependencies)
+
+```go
+// Use interfaces and mocks
+type MockMessageRepository struct {
+    mock.Mock
+}
+
+func (m *MockMessageRepository) Save(ctx context.Context, msg *Message) error {
+    args := m.Called(ctx, msg)
+    return args.Error(0)
+}
+```
+
+#### Integration Tests (With Test Containers)
+
+```go
+// +build integration
+
+func TestMessageRepository_Save_PersistsToPostgres(t *testing.T) {
+    // Use testcontainers-go for real PostgreSQL
+}
+```
+
+### Coverage Requirements
+
+- **Minimum 80%** code coverage for all packages
+- **100% coverage** for critical paths:
+  - Message persistence
+  - WebSocket message routing
+  - XSS sanitization
+  - Authentication/Authorization
+
+### Running Tests
+
+```bash
+# Unit tests only (fast, no external deps)
+go test ./... -short
+
+# All tests including integration
+go test ./... -tags=integration
+
+# With coverage report
+go test ./... -coverprofile=coverage.out -covermode=atomic
+go tool cover -html=coverage.out
+```
+
+## Frontend Testing Guidelines (React/TypeScript)
+
+### Required Test Files Structure
+
+```
+src/
+├── components/
+│   ├── MessageBubble/
+│   │   ├── MessageBubble.tsx
+│   │   ├── MessageBubble.test.tsx
+│   │   └── MessageBubble.stories.tsx  # Storybook for visual testing
+│   ├── ChatRoom/
+│   │   ├── ChatRoom.tsx
+│   │   └── ChatRoom.test.tsx
+├── hooks/
+│   ├── useWebSocket.ts
+│   └── useWebSocket.test.ts
+├── stores/
+│   ├── chatStore.ts
+│   └── chatStore.test.ts
+```
+
+### Testing Libraries
+
+```json
+{
+  "devDependencies": {
+    "@testing-library/react": "^14.0.0",
+    "@testing-library/jest-dom": "^6.0.0",
+    "@testing-library/user-event": "^14.0.0",
+    "vitest": "^1.0.0",
+    "msw": "^2.0.0"
+  }
+}
+```
+
+### Test Categories
+
+#### Component Tests
+
+```typescript
+import { render, screen } from '@testing-library/react';
+import { MessageBubble } from './MessageBubble';
+
+describe('MessageBubble', () => {
+  it('renders markdown content correctly', () => {
+    render(<MessageBubble content="**bold text**" contentType="markdown" />);
+    expect(screen.getByText('bold text')).toHaveStyle('font-weight: bold');
+  });
+});
+```
+
+#### Hook Tests
+
+```typescript
+import { renderHook, act } from '@testing-library/react';
+import { useWebSocket } from './useWebSocket';
+
+describe('useWebSocket', () => {
+  it('reconnects with exponential backoff on disconnect', async () => {
+    // Mock WebSocket and verify reconnection behavior
+  });
+});
+```
+
+#### Store Tests
+
+```typescript
+import { useChatStore } from './chatStore';
+
+describe('chatStore', () => {
+  it('adds message optimistically before server ACK', () => {
+    const { addOptimisticMessage, messages } = useChatStore.getState();
+    addOptimisticMessage({ id: 'temp_1', content: 'Hello' });
+    expect(messages['temp_1'].status).toBe('pending');
+  });
+});
+```
+
+### Coverage Requirements
+
+- **Minimum 80%** code coverage
+- **100% coverage** for:
+  - WebSocket state management
+  - Message rendering logic
+  - Optimistic UI updates
+
+### Running Tests
+
+```bash
+# Run all tests
+npm run test
+
+# Watch mode during development
+npm run test:watch
+
+# Coverage report
+npm run test:coverage
+```
+
+## WebSocket Testing Strategy
+
+### Backend WebSocket Tests
+
+```go
+func TestWebSocketHub_Broadcast_DeliversToAllClients(t *testing.T) {
+    hub := NewHub()
+    go hub.Run()
+    
+    // Create mock clients
+    client1 := newMockClient(hub)
+    client2 := newMockClient(hub)
+    
+    // Register clients
+    hub.Register <- client1
+    hub.Register <- client2
+    
+    // Broadcast message
+    hub.Broadcast <- []byte(`{"event":"message.new","data":{}}`)
+    
+    // Assert both clients received the message
+    assert.Eventually(t, func() bool {
+        return client1.ReceivedCount() == 1 && client2.ReceivedCount() == 1
+    }, time.Second, 10*time.Millisecond)
+}
+```
+
+### Frontend WebSocket Tests (MSW)
+
+```typescript
+import { setupServer } from 'msw/node';
+import { ws } from 'msw';
+
+const server = setupServer(
+  ws.link('ws://localhost:8080/ws').addEventListener('connection', ({ client }) => {
+    client.addEventListener('message', (event) => {
+      // Mock server response
+      client.send(JSON.stringify({ event: 'message.ack', data: { status: true } }));
+    });
+  })
+);
+```
+
+## Database Testing (PostgreSQL)
+
+### Use Testcontainers for Integration Tests
+
+```go
+func setupTestDB(t *testing.T) *sql.DB {
+    ctx := context.Background()
+    
+    container, err := postgres.RunContainer(ctx,
+        testcontainers.WithImage("postgres:15"),
+        postgres.WithDatabase("byteroom_test"),
+        postgres.WithUsername("test"),
+        postgres.WithPassword("test"),
+    )
+    require.NoError(t, err)
+    
+    t.Cleanup(func() {
+        container.Terminate(ctx)
+    })
+    
+    connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+    require.NoError(t, err)
+    
+    db, err := sql.Open("postgres", connStr)
+    require.NoError(t, err)
+    
+    // Run migrations
+    runMigrations(db)
+    
+    return db
+}
+```
+
+## API Contract Testing
+
+### Define Contracts First
+
+```yaml
+# api/openapi.yaml
+paths:
+  /api/messages/{chatId}:
+    get:
+      summary: Get chat history
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageList'
+```
+
+### Generate Types and Validate
+
+```bash
+# Generate Go types from OpenAPI
+oapi-codegen -generate types -package api api/openapi.yaml > internal/api/types.gen.go
+
+# Generate TypeScript types
+npx openapi-typescript api/openapi.yaml -o src/api/types.ts
+```
+
+## Pre-Commit Hooks
+
+### Required Checks Before Commit
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: local
+    hooks:
+      - id: go-tests
+        name: Go Tests
+        entry: go test ./... -short
+        language: system
+        pass_filenames: false
+        
+      - id: frontend-tests
+        name: Frontend Tests
+        entry: npm test -- --run
+        language: system
+        pass_filenames: false
+```
+
+## CI/CD Test Pipeline
+
+```yaml
+# .github/workflows/test.yml
+name: Test Suite
+
+on: [push, pull_request]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Run Unit Tests
+        run: go test ./... -short -coverprofile=coverage.out
+      - name: Run Integration Tests
+        run: go test ./... -tags=integration
+
+  frontend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - name: Run Tests
+        run: npm run test:coverage
+```
+
+## Exit Criteria for Each Feature
+
+Before marking any feature as "Done", verify:
+
+- [ ] All acceptance tests pass
+- [ ] Unit test coverage ≥ 80%
+- [ ] Integration tests for external dependencies
+- [ ] No failing tests in CI pipeline
+- [ ] Code reviewed and approved
+- [ ] Documentation updated
+
+## Quick Reference
+
+| Action | Command |
+|--------|---------|
+| Run Go unit tests | `go test ./... -short` |
+| Run Go integration tests | `go test ./... -tags=integration` |
+| Go coverage report | `go test ./... -coverprofile=coverage.out && go tool cover -html=coverage.out` |
+| Run frontend tests | `npm run test` |
+| Frontend watch mode | `npm run test:watch` |
+| Frontend coverage | `npm run test:coverage` |

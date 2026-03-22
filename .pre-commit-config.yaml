@@ -1,0 +1,30 @@
+repos:
+  - repo: local
+    hooks:
+      - id: go-vet
+        name: Go Vet
+        entry: bash -c 'cd backend && go vet ./...'
+        language: system
+        pass_filenames: false
+        files: \.go$
+
+      - id: go-tests
+        name: Go Unit Tests
+        entry: bash -c 'cd backend && JWT_SECRET=pre-commit go test ./... -short'
+        language: system
+        pass_filenames: false
+        files: \.go$
+
+      - id: frontend-typecheck
+        name: TypeScript Type Check
+        entry: bash -c 'cd frontend && npx tsc -b --noEmit'
+        language: system
+        pass_filenames: false
+        files: \.(ts|tsx)$
+
+      - id: frontend-tests
+        name: Frontend Unit Tests
+        entry: bash -c 'cd frontend && npm run test'
+        language: system
+        pass_filenames: false
+        files: \.(ts|tsx)$
